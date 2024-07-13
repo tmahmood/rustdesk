@@ -63,7 +63,7 @@ def make_parser():
         "-c", "--custom", action="store_true", help="Is custom client", default=False
     )
     parser.add_argument(
-        "--app-name", type=str, default="RustDesk", help="The app name."
+        "--app-name", type=str, default="VantageControl", help="The app name."
     )
     parser.add_argument(
         "-v", "--version", type=str, default="", help="The app version."
@@ -128,7 +128,7 @@ def insert_components_between_tags(lines, index_start, app_name, dist_dir):
 
 def gen_auto_component(app_name, dist_dir):
     return gen_content_between_tags(
-        "Package/Components/RustDesk.wxs",
+        "Package/Components/VantageControl.wxs",
         "<!--$AutoComonentStart$-->",
         "<!--$AutoComponentEnd$-->",
         lambda lines, index_start: insert_components_between_tags(
@@ -172,7 +172,7 @@ def replace_app_name_in_langs(app_name):
         with open(file_path, "r") as f:
             lines = f.readlines()
         for i, line in enumerate(lines):
-            lines[i] = line.replace("RustDesk", app_name)
+            lines[i] = line.replace("VantageControl", app_name)
         with open(file_path, "w") as f:
             f.writelines(lines)
 
