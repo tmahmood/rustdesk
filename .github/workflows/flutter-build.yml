@@ -78,6 +78,12 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
+
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v1
         with:
@@ -234,6 +240,12 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v3
 
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
+
       - name: Install LLVM and Clang
         uses: rustdesk-org/install-llvm-action-32bit@master
         with:
@@ -349,6 +361,13 @@ jobs:
 
       - name: Checkout source code
         uses: actions/checkout@v3
+
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
+
 
       - name: Install flutter rust bridge deps
         shell: bash
@@ -469,6 +488,12 @@ jobs:
           pushd flutter && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/ios/Runner/bridge_generated.h
 
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
+
       - name: Build rustdesk lib
         run: |
           rustup target add ${{ matrix.job.target }}
@@ -514,6 +539,12 @@ jobs:
 
       - name: Checkout source code
         uses: actions/checkout@v3
+
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
 
       # $VCPKG_ROOT/vcpkg install --triplet arm64-ios --x-install-root="$VCPKG_ROOT/installed"
 
@@ -584,6 +615,18 @@ jobs:
 
       - name: Checkout source code
         uses: actions/checkout@v3
+
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
+
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
 
       - name: Import the codesign cert
         if: env.MACOS_P12_BASE64 != null
@@ -822,6 +865,13 @@ jobs:
 
       - name: Checkout source code
         uses: actions/checkout@v3
+
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
+
       - name: Install flutter
         uses: subosito/flutter-action@v2
         with:
@@ -1010,6 +1060,12 @@ jobs:
 
       - name: Checkout source code
         uses: actions/checkout@v3
+
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
 
       - name: Set Swap Space
         if: ${{ matrix.job.arch == 'x86_64' }}
@@ -1327,6 +1383,12 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v3
 
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
+
       - name: Free Space
         run: |
           df -h
@@ -1628,6 +1690,12 @@ jobs:
     steps:
       - name: Checkout source code
         uses: actions/checkout@v3
+
+      - name: generate_server_paths
+        run: |
+          echo $RS_PUB_KEY > ./libs/hbb_common/src/pb_key
+          echo $RENDEZVOUS_SERVER > ./libs/hbb_common/src/relay_server
+          echo $APP_NAME > ./libs/hbb_common/src/app_name
 
       - name: Prepare env
         run: |
