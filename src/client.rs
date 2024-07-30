@@ -1,14 +1,7 @@
-use std::{
-    collections::HashMap,
-    ffi::c_void,
-    net::SocketAddr,
-    ops::Deref,
-    str::FromStr,
-    sync::{mpsc, Arc, Mutex, RwLock},
-};
-
 use async_trait::async_trait;
 use bytes::Bytes;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use clipboard_master::{CallbackResult, ClipboardHandler};
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -19,6 +12,18 @@ use magnum_opus::{Channels::*, Decoder as AudioDecoder};
 #[cfg(not(any(target_os = "android", target_os = "linux")))]
 use ringbuf::{ring_buffer::RbBase, Rb};
 use sha2::{Digest, Sha256};
+use std::{
+    collections::HashMap,
+    ffi::c_void,
+    io,
+    net::SocketAddr,
+    ops::Deref,
+    str::FromStr,
+    sync::{
+        mpsc::{self, RecvTimeoutError, Sender},
+        Arc, Mutex, RwLock,
+    },
+};
 use uuid::Uuid;
 
 pub use file_trait::FileManager;
@@ -60,12 +65,12 @@ use crate::{
     check_port,
     common::input::{MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP},
     create_symmetric_key_msg, decode_id_pk, get_rs_pk, is_keyboard_mode_supported, secure_tcp,
-    ui_interface::use_texture_render,
+    ui_interface::{get_buildin_option, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::clipboard::{check_clipboard, CLIPBOARD_INTERVAL};
+use crate::clipboard::{check_clipboard, ClipboardSide, CLIPBOARD_INTERVAL};
 #[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ui_session_interface::SessionPermissionConfig;
@@ -136,17 +141,10 @@ lazy_static::lazy_static! {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 lazy_static::lazy_static! {
     static ref ENIGO: Arc<Mutex<enigo::Enigo>> = Arc::new(Mutex::new(enigo::Enigo::new()));
-    static ref OLD_CLIPBOARD_DATA: Arc<Mutex<crate::clipboard::ClipboardData>> = Default::default();
     static ref TEXT_CLIPBOARD_STATE: Arc<Mutex<TextClipboardState>> = Arc::new(Mutex::new(TextClipboardState::new()));
 }
 
 const PUBLIC_SERVER: &str = "public";
-
-#[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn get_old_clipboard_text() -> Arc<Mutex<crate::clipboard::ClipboardData>> {
-    OLD_CLIPBOARD_DATA.clone()
-}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn get_key_state(key: enigo::Key) -> bool {
@@ -543,7 +541,7 @@ impl Client {
         conn: &mut Stream,
     ) -> ResultType<Option<Vec<u8>>> {
         let rs_pk = get_rs_pk(if key.is_empty() {
-            hbb_common::config::RS_PUB_KEY
+            config::RS_PUB_KEY
         } else {
             key
         });
@@ -714,6 +712,13 @@ impl Client {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn try_stop_clipboard() {
+        // There's a bug here.
+        // If session is closed by the peer, `has_sessions_running()` will always return true.
+        // It's better to check if the active session number.
+        // But it's not a problem, because the clipboard thread does not consume CPU.
+        //
+        // If we want to fix it, we can add a flag to indicate if session is active.
+        // But I think it's not necessary to introduce complexity at this point.
         #[cfg(feature = "flutter")]
         if crate::flutter::sessions::has_sessions_running(ConnType::DEFAULT_CONN) {
             return;
@@ -727,18 +732,44 @@ impl Client {
     //
     // If clipboard update is detected, the text will be sent to all sessions by `send_text_clipboard_msg`.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn try_start_clipboard(_ctx: Option<ClientClipboardContext>) -> Option<UnboundedReceiver<()>> {
+    fn try_start_clipboard(
+        _client_clip_ctx: Option<ClientClipboardContext>,
+    ) -> Option<UnboundedReceiver<()>> {
         let mut clipboard_lock = TEXT_CLIPBOARD_STATE.lock().unwrap();
         if clipboard_lock.running {
             return None;
         }
+
+        let (tx_cb_result, rx_cb_result) = mpsc::channel();
+        let handler = ClientClipboardHandler {
+            ctx: None,
+            tx_cb_result,
+            #[cfg(not(feature = "flutter"))]
+            client_clip_ctx: _client_clip_ctx,
+        };
+
+        let (tx_start_res, rx_start_res) = mpsc::channel();
+        let h = crate::clipboard::start_clipbard_master_thread(handler, tx_start_res);
+        let shutdown = match rx_start_res.recv() {
+            Ok((Some(s), _)) => s,
+            Ok((None, err)) => {
+                log::error!("{}", err);
+                return None;
+            }
+            Err(e) => {
+                log::error!("Failed to create clipboard listener: {}", e);
+                return None;
+            }
+        };
+
         clipboard_lock.running = true;
-        let (tx, rx) = unbounded_channel();
+
+        let (tx_started, rx_started) = unbounded_channel();
 
         log::info!("Start text clipboard loop");
         std::thread::spawn(move || {
             let mut is_sent = false;
-            let mut ctx = None;
+
             loop {
                 if !TEXT_CLIPBOARD_STATE.lock().unwrap().running {
                     break;
@@ -748,39 +779,31 @@ impl Client {
                     continue;
                 }
 
-                if let Some(msg) = check_clipboard(&mut ctx, Some(OLD_CLIPBOARD_DATA.clone())) {
-                    #[cfg(feature = "flutter")]
-                    crate::flutter::send_text_clipboard_msg(msg);
-                    #[cfg(not(feature = "flutter"))]
-                    if let Some(ctx) = &_ctx {
-                        if ctx.cfg.is_text_clipboard_required() {
-                            let _ = ctx.tx.send(Data::Message(msg));
-                        }
-                    }
-                }
-
                 if !is_sent {
                     is_sent = true;
-                    tx.send(()).ok();
+                    tx_started.send(()).ok();
                 }
 
-                std::thread::sleep(Duration::from_millis(CLIPBOARD_INTERVAL));
+                match rx_cb_result.recv_timeout(Duration::from_millis(CLIPBOARD_INTERVAL)) {
+                    Ok(CallbackResult::Stop) => {
+                        log::debug!("Clipboard listener stopped");
+                        break;
+                    }
+                    Ok(CallbackResult::StopWithError(err)) => {
+                        log::error!("Clipboard listener stopped with error: {}", err);
+                        break;
+                    }
+                    Err(RecvTimeoutError::Timeout) => {}
+                    _ => {}
+                }
             }
             log::info!("Stop text clipboard loop");
+            shutdown.signal();
+            h.join().ok();
+            TEXT_CLIPBOARD_STATE.lock().unwrap().running = false;
         });
 
-        Some(rx)
-    }
-
-    #[inline]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn get_current_clipboard_msg() -> Option<Message> {
-        let data = &*OLD_CLIPBOARD_DATA.lock().unwrap();
-        if data.is_empty() {
-            None
-        } else {
-            Some(data.create_msg())
-        }
+        Some(rx_started)
     }
 }
 
@@ -791,6 +814,65 @@ impl TextClipboardState {
             is_required: true,
             running: false,
         }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct ClientClipboardHandler {
+    ctx: Option<crate::clipboard::ClipboardContext>,
+    tx_cb_result: Sender<CallbackResult>,
+    #[cfg(not(feature = "flutter"))]
+    client_clip_ctx: Option<ClientClipboardContext>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl ClientClipboardHandler {
+    #[inline]
+    #[cfg(feature = "flutter")]
+    fn send_msg(&self, msg: Message) {
+        crate::flutter::send_text_clipboard_msg(msg);
+    }
+
+    #[cfg(not(feature = "flutter"))]
+    fn send_msg(&self, msg: Message) {
+        if let Some(ctx) = &self.client_clip_ctx {
+            if ctx.cfg.is_text_clipboard_required() {
+                if let Some(pi) = ctx.cfg.lc.read().unwrap().peer_info.as_ref() {
+                    if let Some(message::Union::MultiClipboards(multi_clipboards)) = &msg.union {
+                        if let Some(msg_out) = crate::clipboard::get_msg_if_not_support_multi_clip(
+                            &pi.version,
+                            &pi.platform,
+                            multi_clipboards,
+                        ) {
+                            let _ = ctx.tx.send(Data::Message(msg_out));
+                            return;
+                        }
+                    }
+                }
+                let _ = ctx.tx.send(Data::Message(msg));
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl ClipboardHandler for ClientClipboardHandler {
+    fn on_clipboard_change(&mut self) -> CallbackResult {
+        if TEXT_CLIPBOARD_STATE.lock().unwrap().running
+            && TEXT_CLIPBOARD_STATE.lock().unwrap().is_required
+        {
+            if let Some(msg) = check_clipboard(&mut self.ctx, ClipboardSide::Client, false) {
+                self.send_msg(msg);
+            }
+        }
+        CallbackResult::Next
+    }
+
+    fn on_clipboard_error(&mut self, error: io::Error) -> CallbackResult {
+        self.tx_cb_result
+            .send(CallbackResult::StopWithError(error))
+            .ok();
+        CallbackResult::Next
     }
 }
 
@@ -2027,15 +2109,27 @@ impl LoginConfigHandler {
         } else {
             (my_id, self.id.clone())
         };
-        let mut display_name = LocalConfig::get_option(&config::keys::OPTION_DISPLAY_NAME);
+        let mut display_name = get_buildin_option(config::keys::OPTION_DISPLAY_NAME);
+        if display_name.is_empty() {
+            display_name = serde_json::from_str::<HashMap<String, String>>(
+                &LocalConfig::get_option("user_info"),
+            )
+            .map(|mut x| x.remove("name").unwrap_or_default())
+            .unwrap_or_default();
+        }
         if display_name.is_empty() {
             display_name = crate::username();
         }
+        #[cfg(not(target_os = "android"))]
+        let my_platform = whoami::platform().to_string();
+        #[cfg(target_os = "android")]
+        let my_platform = "Android".into();
         let mut lr = LoginRequest {
             username: pure_id,
             password: password.into(),
             my_id,
             my_name: display_name,
+            my_platform,
             option: self.get_option_message(true).into(),
             session_id: self.session_id,
             version: crate::VERSION.to_string(),
@@ -2374,7 +2468,7 @@ fn get_hwcodec_config() {
             let start = std::time::Instant::now();
             if let Err(e) = crate::ipc::get_hwcodec_config_from_server() {
                 log::error!(
-                    "failed to get hwcodec config: {e:?}, elapsed: {:?}",
+                    "Failed to get hwcodec config: {e:?}, elapsed: {:?}",
                     start.elapsed()
                 );
             } else {
@@ -2625,7 +2719,7 @@ struct LoginErrorMsgBox {
 
 lazy_static::lazy_static! {
     static ref LOGIN_ERROR_MAP: Arc<HashMap<&'static str, LoginErrorMsgBox>> = {
-        use hbb_common::config::LINK_HEADLESS_LINUX_SUPPORT;
+        use config::LINK_HEADLESS_LINUX_SUPPORT;
         let map = HashMap::from([(LOGIN_SCREEN_WAYLAND, LoginErrorMsgBox{
             msgtype: "error",
             title: "Login Error",
@@ -2791,6 +2885,20 @@ pub async fn handle_hash(
     if password.is_empty() {
         try_get_password_from_personal_ab(lc.clone(), &mut password);
     }
+
+    if password.is_empty() {
+        let p =
+            crate::ui_interface::get_buildin_option(config::keys::OPTION_DEFAULT_CONNECT_PASSWORD);
+        if !p.is_empty() {
+            let mut hasher = Sha256::new();
+            hasher.update(p.clone());
+            hasher.update(&hash.salt);
+            let res = hasher.finalize();
+            password = res[..].into();
+            lc.write().unwrap().password_source = PasswordSource::SharedAb(p); // reuse SharedAb here
+        }
+    }
+
     lc.write().unwrap().password = password.clone();
     let password = if password.is_empty() {
         // login without password, the remote side can click accept
@@ -2813,7 +2921,7 @@ pub async fn handle_hash(
 #[inline]
 fn try_get_password_from_personal_ab(lc: Arc<RwLock<LoginConfigHandler>>, password: &mut Vec<u8>) {
     let access_token = LocalConfig::get_option("access_token");
-    let ab = hbb_common::config::Ab::load();
+    let ab = config::Ab::load();
     if !access_token.is_empty() && access_token == ab.access_token {
         let id = lc.read().unwrap().id.clone();
         if let Some(ab) = ab.ab_entries.iter().find(|a| a.personal()) {
@@ -2980,7 +3088,9 @@ pub trait Interface: Send + Clone + 'static + Sized {
         log::error!("Connection closed: {err}({errno})");
         if direct == Some(true)
             && ((cfg!(windows) && (errno == 10054 || err.contains("10054")))
-                || (!cfg!(windows) && (errno == 104 || err.contains("104"))))
+                || (!cfg!(windows) && (errno == 104 || err.contains("104")))
+                || (!err.contains("Failed") && err.contains("deadline")))
+        // deadline: https://github.com/rustdesk/rustdesk-server-pro/discussions/325, most likely comes from secure tcp timeout
         {
             relay_hint = true;
             if !received {
