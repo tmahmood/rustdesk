@@ -60,7 +60,6 @@ gstreamer-video = { version = "0.16", optional = true }
 
 [dependencies.hwcodec]
 git = "https://github.com/21pages/hwcodec"
-rev = "852de982"
 optional = true
 
 
