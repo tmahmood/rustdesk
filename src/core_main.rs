@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 #[cfg(windows)]
 use crate::client::translate;
 #[cfg(not(debug_assertions))]
@@ -8,12 +7,11 @@ use crate::platform::breakdown_callback;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::platform::register_breakdown_handler;
 use hbb_common::{config, log};
-use hbb_common::config::{Config2, RELAY_PORT};
 #[cfg(windows)]
 use tauri_winrt_notification::{Duration, Sound, Toast};
 
 #[macro_export]
-macro_rules! my_println {
+macro_rules! my_println{
     ($($arg:tt)*) => {
         #[cfg(not(windows))]
         println!("{}", format_args!($($arg)*));
@@ -54,7 +52,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 "--port-forward",
                 "--rdp",
             ]
-                .contains(&arg.as_str())
+            .contains(&arg.as_str())
             {
                 _is_flutter_invoke_new_connection = true;
             }
@@ -124,8 +122,8 @@ pub fn core_main() -> Option<Vec<String>> {
         _is_quick_support |= !crate::platform::is_installed()
             && args.is_empty()
             && (arg_exe.to_lowercase().contains("-qs-")
-            || config::LocalConfig::get_option("pre-elevate-service") == "Y"
-            || (!click_setup && crate::platform::is_elevated(None).unwrap_or(false)));
+                || config::LocalConfig::get_option("pre-elevate-service") == "Y"
+                || (!click_setup && crate::platform::is_elevated(None).unwrap_or(false)));
         crate::portable_service::client::set_quick_support(_is_quick_support);
     }
     let mut log_name = "".to_owned();
@@ -167,7 +165,6 @@ pub fn core_main() -> Option<Vec<String>> {
     if args.is_empty() || crate::common::is_empty_uni_link(&args[0]) {
         std::thread::spawn(move || crate::start_server(false));
     } else {
-        let options = crate::ipc::get_options();
         #[cfg(windows)]
         {
             use crate::platform;
@@ -252,9 +249,7 @@ pub fn core_main() -> Option<Vec<String>> {
             return None;
         } else if args[0] == "--install-service" {
             log::info!("start --install-service");
-            if options.get("APPTYPE").clone().unwrap_or(&"".to_owned()) == "service" {
-                crate::platform::install_service();
-            }
+            crate::platform::install_service();
             return None;
         } else if args[0] == "--uninstall-service" {
             log::info!("start --uninstall-service");
@@ -262,31 +257,22 @@ pub fn core_main() -> Option<Vec<String>> {
             return None;
         } else if args[0] == "--service" {
             log::info!("start --service");
-            // TODO: When first ran, send the ID to vc server
-            if options.get("APPTYPE").clone().unwrap_or(&"".to_owned()) == "service" {
-                //
-                crate::start_os_service();
-            } else {
-                log::info!("ignoring");
-            }
+            crate::start_os_service();
             return None;
         } else if args[0] == "--server" {
-            if options.get("APPTYPE").clone().unwrap_or(&"".to_owned()) == "service" {
-                log::info!("start --server with user {}", crate::username());
-                //
-                #[cfg(windows)]
-                crate::privacy_mode::restore_reg_connectivity(true);
-                #[cfg(any(target_os = "linux", target_os = "windows"))]
-                {
-                    crate::start_server(true);
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    let handler = std::thread::spawn(move || crate::start_server(true));
-                    crate::tray::start_tray();
-                    // prevent server exit when encountering errors from tray
-                    hbb_common::allow_err!(handler.join());
-                }
+            log::info!("start --server with user {}", crate::username());
+            #[cfg(windows)]
+            crate::privacy_mode::restore_reg_connectivity(true);
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            {
+                crate::start_server(true);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let handler = std::thread::spawn(move || crate::start_server(true));
+                crate::tray::start_tray();
+                // prevent server exit when encountering errors from tray
+                hbb_common::allow_err!(handler.join());
             }
             return None;
         } else if args[0] == "--import-config" {
@@ -436,37 +422,6 @@ pub fn core_main() -> Option<Vec<String>> {
             #[cfg(feature = "flutter")]
             #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "windows")))]
             crate::flutter::connection_manager::start_cm_no_ui();
-            return None;
-        } else if args[0] == "--vc" {
-            // our custom config
-            // on windows we know the app is already elevated
-            // service, needs to be as root or elevated
-            // detect parameters
-            let mut hm = HashMap::new();
-            println!("{:?}", args);
-            args.iter().skip(1).for_each(|v| {
-                let vv: Vec<String> = v.split("=").map(|v| v.to_string()).collect();
-                if &vv[0] == "VERYSILENT" {
-                    hm.insert("very_silent".to_string(), "true".to_string());
-                } else {
-                    if &vv[0] == "SERVERURL" {
-                        hm.insert("custom-rendezvous-server".to_string(), vv[1].clone());
-                    } else if &vv[0] == "RELAYSERVER" {
-                        hm.insert("relay-server".to_string(), vv[1].clone());
-                    } else if &vv[0] == "RELAYPORT" {
-                        hm.insert("relay-port".to_string(), vv[1].clone());
-                    } else {
-                        hm.insert(vv[0].clone(), vv[1].clone());
-                    }
-                }
-            });
-            let rp = hm.remove("relay-port").unwrap_or(RELAY_PORT.to_string());
-            if let Some(mm) = hm.get_mut("relay-server") {
-                mm.push_str(&format!(":{}", rp))
-            }
-            hm.iter().for_each(|(ky, vl)| {
-                crate::ipc::set_option(ky, vl);
-            });
             return None;
         } else {
             #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
